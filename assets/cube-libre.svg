@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>Cube Libre — a cocktail with lime and cube-shaped ice</title>
+  <defs>
+    <linearGradient id="cl-bg" x1="24" y1="12" x2="228" y2="252" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#254B46"/><stop offset="1" stop-color="#0E242B"/>
+    </linearGradient>
+    <linearGradient id="cl-drink" x1="128" y1="115" x2="128" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E7B56A"/><stop offset="1" stop-color="#B97239"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="248" height="248" rx="56" fill="url(#cl-bg)"/>
+  <rect x="5.5" y="5.5" width="245" height="245" rx="54.5" stroke="#83E6BE" stroke-opacity=".18" stroke-width="3"/>
+  <ellipse cx="128" cy="215" rx="58" ry="8" fill="#081D25" fill-opacity=".6"/>
+  <path d="M151 138 177 45h23" stroke="#BCEBDF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m179 46-24 88" stroke="#F4FFF7" stroke-opacity=".35" stroke-width="3" stroke-linecap="round"/>
+  <path d="m68 91 12 108c.6 6 5.8 11 12 11h72c6.2 0 11.4-5 12-11l12-108H68Z" fill="#B8E7DE" fill-opacity=".07"/>
+  <path d="m74 126 8 72a11 11 0 0 0 11 10h70a11 11 0 0 0 11-10l8-72c-33 13-70-13-108 0Z" fill="url(#cl-drink)"/>
+  <path d="m101 116 27 7-6 27-27-7 6-27Z" fill="#E8FAEC" fill-opacity=".78" stroke="#F5FFF7" stroke-opacity=".75" stroke-width="2"/>
+  <path d="m140 149 26-6 6 26-26 6-6-26Z" fill="#E8FAEC" fill-opacity=".64" stroke="#F5FFF7" stroke-opacity=".7" stroke-width="2"/>
+  <path d="m108 119-5 24m37 12 25-6" stroke="#FFFBE7" stroke-opacity=".45" stroke-width="2" stroke-linecap="round"/>
+  <path d="m68 91 12 108c.6 6 5.8 11 12 11h72c6.2 0 11.4-5 12-11l12-108H68Z" stroke="#E4F6EA" stroke-width="7" stroke-linejoin="round"/>
+  <path d="m83 106 8 77" stroke="#E4F6EA" stroke-opacity=".38" stroke-width="4" stroke-linecap="round"/>
+  <path d="M68 91h120" stroke="#F2F9E8" stroke-width="7" stroke-linecap="round"/>
+  <path d="M62 86a40 40 0 0 1 76-24L62 86Z" fill="#ABDF5B" stroke="#D4F699" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M70 79a31 31 0 0 1 59-17L70 79Z" fill="#D4EF9C"/>
+  <path d="m101 71-3-28m3 28-24-17m24 17 17-24" stroke="#77B542" stroke-width="3" stroke-linecap="round"/>
+  <path d="m61 87 77-25" stroke="#F0F7CE" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="116" cy="179" r="3" fill="#F7DC9B" fill-opacity=".7"/>
+  <circle cx="130" cy="191" r="2" fill="#F7DC9B" fill-opacity=".55"/>
+</svg>

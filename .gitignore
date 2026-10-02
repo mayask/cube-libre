@@ -1,0 +1,10 @@
+/target/
+/dist/
+/.dev/
+*.log
+.DS_Store
+.env
+.env.*
+*.bundle
+*.pem
+*.key

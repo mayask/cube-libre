@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cube Libre
+Comment=Local-first smart cube workspace
+Exec=cube-libre
+Icon=io.github.mayask.cubelibre
+Terminal=false
+Categories=Education;
+Keywords=cube;bluetooth;GAN;
+StartupWMClass=Cube Libre

@@ -1,0 +1,10 @@
+[application]
+name = "Cube Libre"
+default_platform = "desktop"
+
+[bundle]
+identifier = "io.github.mayask.cubelibre"
+publisher = "Cube Libre"
+icon = ["assets/icon.png", "assets/icon.ico", "assets/icon.icns"]
+short_description = "Local-first smart cube workspace"
+category = "Education"

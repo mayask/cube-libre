@@ -1,0 +1,23 @@
+[package]
+name = "cube-ble"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+cube-core = { path = "../cube-core" }
+btleplug = "0.13.3"
+tokio.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+futures-util = "0.3"
+uuid = "1"
+serde.workspace = true
+serde_json.workspace = true
+directories = "6"
+tempfile = "3"
+anyhow = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

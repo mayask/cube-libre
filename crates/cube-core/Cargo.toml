@@ -1,0 +1,11 @@
+[package]
+name = "cube-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+aes = "0.8.4"
+serde.workspace = true
+thiserror.workspace = true
