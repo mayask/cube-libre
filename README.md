@@ -1,6 +1,6 @@
 # Cube Libre
 
-<img src="assets/cube-libre.svg" width="112" alt="Cube Libre: a cocktail with lime and cube-shaped ice">
+<img src="assets/cube-libre.svg" width="112" alt="Cube Libre: a cocktail with lime and miniature twisty cubes">
 
 A small, local-first smart-cube workspace in **Rust + Dioxus 0.7**. Native BLE
 through **btleplug**, not a browser Bluetooth API. No account, telemetry, cloud,
@@ -10,11 +10,14 @@ external fonts, or CubeStation dependency during normal use.
 
 - Discover, save, rename, connect and forget GAN cubes. Multiple saved devices,
   **one active cube at a time**.
-- GAN **Gen4**, including the GAN iCarry E / `GANicE3` hardware family.
-  Other GAN generations are detected as unsupported rather than decoded incorrectly.
+- GAN **Gen1–Gen4**, including original 356i, iCarry/iCarry S/iCarry 2/iCarry E,
+  GAN i-series and compatible MG/AiCube models. Drivers are selected by GATT
+  service, never guessed from the model name. See [protocol coverage](docs/GAN_PROTOCOLS.md)
+  for firmware limits, model examples and hardware-validation status.
 - Real cube-fixed state in a rotatable CSS 3D view or all-six-faces net.
 - Live face turns, battery and hardware information, a bounded move log.
-- Read-only keep-alive / state checks every **5 seconds**, battery checks every
+- Gen1 move-window polling; read-only keep-alive / state checks every **5 seconds**,
+  battery checks every
   minute, automatic reconnect with capped backoff, startup reconnect preference.
 - Explicit unknown, last-known, synchronizing and live states. Missed events trigger
   an authoritative cube snapshot; missing move-log entries are **not invented**.
@@ -26,9 +29,10 @@ worker runs independently of the UI while the app remains open. It detects a
 silent connection, reconnects, and reads state again. It cannot wake a sleeping,
 out-of-range cube over a disconnected link. Keeping a cube awake uses its battery.
 
-The iCarry E has no gyro: whole-cube rotations cannot be inferred from its sensors.
-Use **white up / green front** as the cube's reference frame. View controls rotate
-only the camera; they never rotate or recalibrate the cube's internal state.
+Use **white up / green front** as the cube's fixed reference frame. View controls
+rotate only the camera; they never rotate or recalibrate the cube's internal state.
+The iCarry E has no gyro. Optional gyro data from other models is currently ignored;
+automatic whole-cube orientation tracking is not implemented.
 
 ## Run on desktop
 
@@ -68,9 +72,12 @@ works without a separate asset server or frontend toolchain.
 4. **Add a device** → select the discovered cube → **Add & connect**.
 5. Wait for **LIVE STATE** before relying on the display.
 
-The real hardware MAC is required for GAN key derivation. It is normally obtained
-from BLE manufacturer data (including on Apple platforms), with a manual-entry
-fallback. No pairing, reset, calibration or firmware-update commands are sent.
+**Gen2–Gen4** require the real hardware MAC for key derivation. It is normally
+obtained from BLE manufacturer data (including on Apple platforms), with a
+manual-entry fallback. **Gen1** reads its key from device information and does
+not require a MAC; briefly hold it still for the initial snapshot. Existing saved
+MAC-based records still work. No pairing, reset, calibration or firmware-update
+commands are sent.
 
 **Disconnect** pauses the current connection until you reconnect (or relaunch with
 Reconnect on launch enabled). **Forget** removes only the local device record.
@@ -122,6 +129,8 @@ cargo fmt --all -- --check
 cargo test -p cube-core --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
+# Linux/libvirt helper tests use mocks only—no real adapter is touched:
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Protocol tests include independent OpenSSL encryption vectors; cube tests compare
@@ -160,11 +169,14 @@ These helpers sync one-way from host to VM and append build/test/app output to
 the guest's `~/cube-libre-dev.log`. Keep a terminal with
 `tail -F ~/cube-libre-dev.log` open in the same desktop during manual testing.
 Private configuration, logs, Git history and build artifacts are excluded from
-source sync. See `docs/TESTING.md` for the hardware checklist.
+source sync. See [VM Bluetooth setup](docs/VM_BLUETOOTH.md) for reversible,
+permission-gated USB passthrough and `docs/TESTING.md` for the hardware checklist.
+`scripts/vm-bluetooth.sh inspect` inventories only; it does not hand over a radio.
 
 ### Artwork
 
-The cocktail-and-lime icon is original SVG artwork, licensed with this project.
+The cocktail-and-lime icon contains **two miniature 3×3 twisty cubes instead of
+ice**. It is original SVG artwork, licensed with this project.
 The same mark is used in the app, desktop window and packaging assets. Regenerate
 the PNG/ICO/ICNS variants with `scripts/generate-icons.sh` (ImageMagick and Python
 Pillow are development-only dependencies; the app does not require them).
@@ -176,8 +188,17 @@ logs must not be committed. `.dev/`, environment files, key files and logs are
 ignored by default. All example MAC addresses in tests are synthetic.
 Review both file contents and Git author metadata before making a fork public.
 
+## Protocol credits
+
+A big thank-you to **Andy Fedotov** ([gan-web-bluetooth](https://github.com/afedotov/gan-web-bluetooth))
+for the Gen2–Gen4 implementations, and **Pau Oliva** ([smartcube-web-bluetooth](https://github.com/poliva/smartcube-web-bluetooth))
+for the Gen1 extension and additional validation. The upstreams also recognize
+**Chen Shuang / csTimer** for earlier reverse-engineering work. These community
+implementations made broader compatibility possible. See
+[coverage and provenance](docs/GAN_PROTOCOLS.md) for the exact adaptations.
+
 ## License
 
-MIT. GAN protocol portions retain Andy Fedotov's MIT attribution; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This is an independent project,
-not an official GAN product.
+MIT. GAN protocol portions retain the original MIT copyright/license notices for
+Andy Fedotov and Pau Oliva; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This is an independent project, not an official GAN product.

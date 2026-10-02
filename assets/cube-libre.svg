@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
-  <title>Cube Libre — a cocktail with lime and cube-shaped ice</title>
+  <title>Cube Libre — a cocktail with lime and miniature twisty cubes</title>
   <defs>
     <linearGradient id="cl-bg" x1="24" y1="12" x2="228" y2="252" gradientUnits="userSpaceOnUse">
       <stop stop-color="#254B46"/><stop offset="1" stop-color="#0E242B"/>
@@ -15,9 +15,35 @@
   <path d="m179 46-24 88" stroke="#F4FFF7" stroke-opacity=".35" stroke-width="3" stroke-linecap="round"/>
   <path d="m68 91 12 108c.6 6 5.8 11 12 11h72c6.2 0 11.4-5 12-11l12-108H68Z" fill="#B8E7DE" fill-opacity=".07"/>
   <path d="m74 126 8 72a11 11 0 0 0 11 10h70a11 11 0 0 0 11-10l8-72c-33 13-70-13-108 0Z" fill="url(#cl-drink)"/>
-  <path d="m101 116 27 7-6 27-27-7 6-27Z" fill="#E8FAEC" fill-opacity=".78" stroke="#F5FFF7" stroke-opacity=".75" stroke-width="2"/>
-  <path d="m140 149 26-6 6 26-26 6-6-26Z" fill="#E8FAEC" fill-opacity=".64" stroke="#F5FFF7" stroke-opacity=".7" stroke-width="2"/>
-  <path d="m108 119-5 24m37 12 25-6" stroke="#FFFBE7" stroke-opacity=".45" stroke-width="2" stroke-linecap="round"/>
+  <!-- Three affine 3x3 faces per cube: original artwork, not a logo. -->
+  <g stroke="#122D32" stroke-width="1.5" stroke-linejoin="round">
+    <g transform="matrix(9 3 -6 5 110 111)">
+      <path d="M0 0H3V3H0Z" fill="#F2F6DD" stroke-width=".12"/>
+      <path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke-width=".14"/>
+    </g>
+    <g transform="matrix(9 3 0 10 92 126)">
+      <path d="M0 0H3V3H0Z" fill="#F07462" stroke-width=".12"/>
+      <path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke-width=".14"/>
+    </g>
+    <g transform="matrix(6 -5 0 10 119 135)">
+      <path d="M0 0H3V3H0Z" fill="#71C9A1" stroke-width=".12"/>
+      <path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke-width=".14"/>
+    </g>
+    <path d="m110 111 27 9v30l-18 15-27-9v-30Z"/>
+    <g transform="matrix(7 -2 5 4 138 148)">
+      <path d="M0 0H3V3H0Z" fill="#F4D86D" stroke-width=".14"/>
+      <path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke-width=".16"/>
+    </g>
+    <g transform="matrix(7 -2 0 8 153 160)">
+      <path d="M0 0H3V3H0Z" fill="#699DD9" stroke-width=".14"/>
+      <path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke-width=".16"/>
+    </g>
+    <g transform="matrix(5 4 0 8 138 148)">
+      <path d="M0 0H3V3H0Z" fill="#F49B57" stroke-width=".14"/>
+      <path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke-width=".16"/>
+    </g>
+    <path d="m138 148 21-6 15 12v24l-21 6-15-12Z"/>
+  </g>
   <path d="m68 91 12 108c.6 6 5.8 11 12 11h72c6.2 0 11.4-5 12-11l12-108H68Z" stroke="#E4F6EA" stroke-width="7" stroke-linejoin="round"/>
   <path d="m83 106 8 77" stroke="#E4F6EA" stroke-opacity=".38" stroke-width="4" stroke-linecap="round"/>
   <path d="M68 91h120" stroke="#F2F9E8" stroke-width="7" stroke-linecap="round"/>

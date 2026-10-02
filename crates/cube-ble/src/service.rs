@@ -255,13 +255,24 @@ impl Actor {
                 mac_override,
             } => {
                 let mac = if mac_override.trim().is_empty() {
-                    device.mac.context("The cube did not advertise its hardware address. Enter it manually; it is required to decode GAN data.")?
+                    device.mac
                 } else {
-                    mac_override.parse()?
+                    Some(mac_override.parse()?)
                 };
                 let mut registry = self.state.registry.clone();
-                let id = mac.to_string();
-                if let Some(saved) = registry.devices.iter_mut().find(|d| d.id == id) {
+                let id = mac
+                    .map(|mac| mac.to_string())
+                    .unwrap_or_else(|| format!("ble:{}", device.id));
+                if let Some(saved) = registry
+                    .devices
+                    .iter_mut()
+                    .find(|d| d.id == id || d.peripheral_id == device.id)
+                {
+                    if registry.selected.as_ref() == Some(&saved.id) {
+                        registry.selected = Some(id.clone());
+                    }
+                    saved.id = id.clone();
+                    saved.mac = mac;
                     saved.peripheral_id = device.id;
                 } else {
                     if !store::valid_name(&device.name) {
@@ -391,7 +402,7 @@ impl Actor {
                 if let Some(error) = error {
                     self.state.error = Some(error);
                 } else if self.state.nearby.is_empty() {
-                    self.state.notice = Some("No GAN cubes found. Wake the cube near the antenna and close CubeStation, then scan again.".into());
+                    self.state.notice = Some("No supported cubes found. Wake the cube near the antenna and close CubeStation, then scan again.".into());
                 }
             }
             Message::Status {
@@ -404,6 +415,7 @@ impl Actor {
                     active.detail = detail;
                     active.synced = false;
                     if status == ConnectionStatus::Connecting {
+                        active.protocol = None;
                         active.history.clear();
                         active.observed_turns = 0;
                         active.missed_turns = 0;
@@ -426,7 +438,11 @@ impl Actor {
                         ConnectionStatus::Synchronizing
                     };
                     active.detail = if tracker.synced {
-                        "Live cube state · keep-alive every 5 seconds"
+                        if active.protocol == Some(cube_core::protocol::Generation::Gen1) {
+                            "Live cube state · Gen1 polling active"
+                        } else {
+                            "Live cube state · keep-alive every 5 seconds"
+                        }
                     } else {
                         "Waiting for authoritative state; last known state shown"
                     }
@@ -439,6 +455,11 @@ impl Actor {
             Message::Turn { session, record } if session == self.generation => {
                 if let Some(active) = &mut self.state.active {
                     active.record(record);
+                }
+            }
+            Message::Protocol { session, protocol } if session == self.generation => {
+                if let Some(active) = &mut self.state.active {
+                    active.protocol = Some(protocol);
                 }
             }
             Message::Metadata { session, event } if session == self.generation => {
@@ -463,6 +484,47 @@ impl Actor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_protocol_is_reported_not_guessed_and_stale_sessions_cannot_change_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let (updates, _) = watch::channel(AppState::default());
+        let mut actor = Actor::new(Ok(temp.path().join("devices.json")), updates);
+        actor.generation = 5;
+        actor.state.active = Some(ActiveCube::demo());
+        actor.message(Message::Protocol {
+            session: 5,
+            protocol: cube_core::protocol::Generation::Gen1,
+        });
+        actor.message(Message::Protocol {
+            session: 4,
+            protocol: cube_core::protocol::Generation::Gen4,
+        });
+        assert_eq!(
+            actor.state.active.as_ref().unwrap().protocol,
+            Some(cube_core::protocol::Generation::Gen1)
+        );
+        let mut tracker = cube_core::sync::Tracker::default();
+        tracker.on_snapshot(72, cube_core::CubeState::solved());
+        actor.message(Message::State {
+            session: 5,
+            tracker,
+        });
+        assert!(
+            actor
+                .state
+                .active
+                .as_ref()
+                .unwrap()
+                .detail
+                .contains("polling")
+        );
+        actor.message(Message::Status {
+            session: 5,
+            status: ConnectionStatus::Connecting,
+            detail: String::new(),
+        });
+        assert!(actor.state.active.as_ref().unwrap().protocol.is_none());
+    }
     #[tokio::test]
     async fn simulator_uses_real_cube_math_without_touching_bluetooth_or_persistence() {
         let temp = tempfile::tempdir().unwrap();

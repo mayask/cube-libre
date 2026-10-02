@@ -27,10 +27,18 @@ pub fn validate(registry: &Registry) -> Result<()> {
     }
     let mut ids = HashSet::new();
     for device in &registry.devices {
-        if device.id != device.mac.to_string() || !ids.insert(&device.id) {
+        let expected = device
+            .mac
+            .map(|mac| mac.to_string())
+            .unwrap_or_else(|| format!("ble:{}", device.peripheral_id));
+        if device.id != expected || !ids.insert(&device.id) {
             bail!("Invalid or duplicated saved device identity");
         }
-        if !valid_name(&device.name) || device.peripheral_id.len() > 512 {
+        if !valid_name(&device.name)
+            || device.peripheral_id.is_empty()
+            || device.peripheral_id.len() > 512
+            || device.peripheral_id.chars().any(char::is_control)
+        {
             bail!("Invalid saved device details");
         }
     }
@@ -84,13 +92,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/devices.json");
         assert_eq!(load(&path).unwrap(), Registry::default());
-        let mac = "01:02:03:04:05:06".parse().unwrap();
+        let mac: cube_core::MacAddress = "01:02:03:04:05:06".parse().unwrap();
         let mut r = Registry::default();
         r.devices.push(SavedDevice {
             id: format!("{mac}"),
             name: "My GAN".into(),
             peripheral_id: "opaque-apple-id".into(),
-            mac,
+            mac: Some(mac),
         });
         r.selected = Some(format!("{mac}"));
         save(&path, &r).unwrap();
@@ -98,6 +106,36 @@ mod tests {
         r.devices[0].name = "Renamed cube".into();
         save(&path, &r).unwrap();
         assert_eq!(load(&path).unwrap(), r);
+    }
+    #[test]
+    fn existing_mac_records_load_without_migration_or_identity_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let old = br#"{"version":1,"devices":[{"id":"01:02:03:04:05:06","name":"Old cube","peripheral_id":"native-id","mac":"01:02:03:04:05:06"}],"selected":"01:02:03:04:05:06","auto_connect":true}"#;
+        fs::write(&path, old).unwrap();
+        let registry = load(&path).unwrap();
+        assert_eq!(
+            registry.devices[0].mac,
+            Some("01:02:03:04:05:06".parse().unwrap())
+        );
+        assert_eq!(fs::read(&path).unwrap(), old);
+    }
+    #[test]
+    fn gen1_can_persist_a_native_identity_without_a_mac() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let mut registry = Registry::default();
+        registry.devices.push(SavedDevice {
+            id: "ble:native-id".into(),
+            name: "Gen1 cube".into(),
+            peripheral_id: "native-id".into(),
+            mac: None,
+        });
+        registry.selected = Some("ble:native-id".into());
+        save(&path, &registry).unwrap();
+        assert_eq!(load(&path).unwrap(), registry);
+        registry.devices[0].id = "wrong-device".into();
+        assert!(save(&path, &registry).is_err());
     }
     #[test]
     fn corrupt_or_future_data_is_not_silently_overwritten() {

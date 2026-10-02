@@ -9,7 +9,7 @@ use btleplug::{
 };
 use cube_core::{
     GanCipher, MacAddress,
-    protocol::{self, Event, ReadRequest},
+    protocol::{Decoder, Event, Generation, KeyProfile, ReadRequest, gen1},
     sync::{ObservedMove, Tracker},
 };
 use futures_util::StreamExt;
@@ -51,6 +51,10 @@ pub(crate) enum Message {
         session: u64,
         event: Event,
     },
+    Protocol {
+        session: u64,
+        protocol: Generation,
+    },
 }
 pub(crate) type Events = mpsc::UnboundedSender<Message>;
 pub(crate) type ScanLock = Arc<Mutex<()>>;
@@ -78,22 +82,22 @@ async fn adapter() -> Result<Adapter> {
 }
 
 fn real_mac(props: &PeripheralProperties) -> Option<MacAddress> {
-    props
+    let advertised = props
         .manufacturer_data
         .iter()
-        .find_map(|(&id, bytes)| MacAddress::from_manufacturer(id, bytes))
-        .or_else(|| {
-            // CoreBluetooth's address is not the hardware MAC. Never derive a key
-            // from an Apple UUID or spoofed address; ask the user if ads lack it.
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-            {
-                props.address.to_string().parse().ok()
-            }
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            {
-                None
-            }
-        })
+        .find_map(|(&id, bytes)| MacAddress::from_manufacturer(id, bytes));
+    // CoreBluetooth IDs/addresses are not hardware MACs. Never salt a key with
+    // an Apple UUID or spoofed address. Gen1 does not need a MAC at all.
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let fallback = props.address.to_string().parse().ok();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let fallback = None;
+    advertised.or(fallback)
+}
+fn supported_name(name: &str) -> bool {
+    ["GAN", "MG", "AiCube"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 async fn nearby(peripheral: &Peripheral) -> Option<NearbyDevice> {
     let props = timeout(Duration::from_secs(2), peripheral.properties())
@@ -104,7 +108,7 @@ async fn nearby(peripheral: &Peripheral) -> Option<NearbyDevice> {
         .local_name
         .clone()
         .or(props.advertisement_name.clone())?;
-    if !name.starts_with("GAN") {
+    if !supported_name(&name) {
         return None;
     }
     Some(NearbyDevice {
@@ -197,7 +201,7 @@ async fn find_cube(
                 if cancel.is_cancelled() { bail!("Cancelled"); }
                 if peripheral.id().to_string() == device.peripheral_id { return Ok(peripheral); }
                 if let Some(props) = timeout(Duration::from_secs(2), peripheral.properties()).await??
-                    && real_mac(&props) == Some(device.mac) { return Ok(peripheral); }
+                    && device.mac.is_some() && real_mac(&props) == device.mac { return Ok(peripheral); }
             }
             tokio::select! { _ = cancel.cancelled() => bail!("Cancelled"), _ = sleep(Duration::from_millis(400)) => {} }
         }
@@ -223,10 +227,18 @@ fn status(tx: &Events, session: u64, status: ConnectionStatus, detail: impl Into
 struct UnsupportedProtocol;
 impl std::fmt::Display for UnsupportedProtocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("This cube does not expose the GAN Gen4 service. This version supports GAN Gen4, including the tested iCarry E; other generations need a driver.")
+        f.write_str("No supported GAN Gen1–Gen4 service found. This firmware/model may use a different protocol; no commands were sent.")
     }
 }
 impl std::error::Error for UnsupportedProtocol {}
+#[derive(Debug)]
+struct MissingMac;
+impl std::fmt::Display for MissingMac {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GAN Gen2–Gen4 needs the real hardware MAC. Add the cube again and enter its MAC; Apple device IDs cannot be used as encryption keys.")
+    }
+}
+impl std::error::Error for MissingMac {}
 
 pub(crate) async fn session(
     device: SavedDevice,
@@ -275,11 +287,24 @@ pub(crate) async fn session(
         let error = result
             .err()
             .unwrap_or_else(|| anyhow!("The cube closed its connection"));
-        if error.downcast_ref::<UnsupportedProtocol>().is_some() {
+        if error.downcast_ref::<UnsupportedProtocol>().is_some()
+            || error
+                .downcast_ref::<cube_core::ProtocolError>()
+                .is_some_and(|e| *e == cube_core::ProtocolError::Firmware)
+        {
             status(
                 &tx,
                 generation,
                 ConnectionStatus::Unsupported,
+                error.to_string(),
+            );
+            break;
+        }
+        if error.downcast_ref::<MissingMac>().is_some() {
+            status(
+                &tx,
+                generation,
+                ConnectionStatus::NeedsSetup,
                 error.to_string(),
             );
             break;
@@ -300,9 +325,10 @@ async fn request(
     peripheral: &Peripheral,
     characteristic: &Characteristic,
     cipher: &GanCipher,
+    protocol: Generation,
     req: ReadRequest,
 ) -> Result<()> {
-    let bytes = cipher.request(req);
+    let bytes = cipher.request(protocol, req)?;
     let kind = if characteristic
         .properties
         .contains(btleplug::api::CharPropFlags::WRITE)
@@ -334,13 +360,29 @@ async fn connected(
         .discover_services_with_timeout(Duration::from_secs(10))
         .await
         .context("Cannot discover cube services")?;
-    let service_uuid = Uuid::parse_str(protocol::SERVICE)?;
-    if !peripheral.services().iter().any(|s| s.uuid == service_uuid) {
-        return Err(UnsupportedProtocol.into());
+    let services: Vec<_> = peripheral
+        .services()
+        .iter()
+        .map(|s| s.uuid.to_string())
+        .collect();
+    let protocol =
+        Generation::from_services(&services.iter().map(String::as_str).collect::<Vec<_>>())
+            .ok_or(UnsupportedProtocol)?;
+    let _ = tx.send(Message::Protocol {
+        session: generation,
+        protocol,
+    });
+    if protocol == Generation::Gen1 {
+        return connected_gen1(peripheral, generation, tx, resync).await;
     }
+    let mac = device.mac.ok_or(MissingMac)?;
+    let service_uuid = Uuid::parse_str(protocol.service())?;
     let chars = peripheral.characteristics();
-    let command_uuid = Uuid::parse_str(protocol::COMMAND)?;
-    let state_uuid = Uuid::parse_str(protocol::STATE)?;
+    let (command_id, state_id) = protocol
+        .notification_profile()
+        .context("Missing GAN notification profile")?;
+    let command_uuid = Uuid::parse_str(command_id)?;
+    let state_uuid = Uuid::parse_str(state_id)?;
     let command = chars
         .iter()
         .find(|c| c.uuid == command_uuid && c.service_uuid == service_uuid)
@@ -351,16 +393,36 @@ async fn connected(
         .context("GAN state characteristic is missing")?;
     let mut notifications = timeout(Duration::from_secs(4), peripheral.notifications()).await??;
     timeout(Duration::from_secs(4), peripheral.subscribe(state)).await??;
-    let cipher = GanCipher::new(device.mac);
+    // The saved display name is user-editable; choose the AiCube key only from
+    // the actual advertisement, and only for the Gen2 wire protocol.
+    let props = timeout(Duration::from_secs(3), peripheral.properties()).await??;
+    let ai_cube = props
+        .as_ref()
+        .and_then(|p| p.local_name.as_deref().or(p.advertisement_name.as_deref()))
+        .is_some_and(|n| n.starts_with("AiCube"));
+    let profile = if protocol == Generation::Gen2 && ai_cube {
+        KeyProfile::MoyuAi2023
+    } else {
+        KeyProfile::Gan
+    };
+    let cipher = GanCipher::for_profile(mac, profile);
+    let mut decoder = Decoder::new(protocol);
     status(
         tx,
         generation,
         ConnectionStatus::Synchronizing,
         "Reading authoritative state; no calibration or reset is performed",
     );
-    request(peripheral, command, &cipher, ReadRequest::State).await?;
-    request(peripheral, command, &cipher, ReadRequest::Battery).await?;
-    request(peripheral, command, &cipher, ReadRequest::Hardware).await?;
+    request(peripheral, command, &cipher, protocol, ReadRequest::State).await?;
+    request(peripheral, command, &cipher, protocol, ReadRequest::Battery).await?;
+    request(
+        peripheral,
+        command,
+        &cipher,
+        protocol,
+        ReadRequest::Hardware,
+    )
+    .await?;
     let mut tracker = Tracker::default();
     let mut housekeeping = interval(Duration::from_millis(250));
     housekeeping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -375,9 +437,9 @@ async fn connected(
             notification = notifications.next() => {
                 let notification = notification.context("Bluetooth notifications ended")?;
                 if notification.uuid != state_uuid { continue; }
-                let decoded = cipher.decrypt(&notification.value).and_then(|plain| protocol::decode(&plain));
-                let event = match decoded {
-                    Ok(event) => { consecutive_decode_errors = 0; event }
+                let decoded = cipher.decrypt(&notification.value).and_then(|plain| decoder.decode(&plain));
+                let events = match decoded {
+                    Ok(events) => { consecutive_decode_errors = 0; events }
                     Err(error) => {
                         consecutive_decode_errors += 1;
                         tracker.invalidate(); request_state = true;
@@ -388,29 +450,9 @@ async fn connected(
                         continue;
                     }
                 };
-                if !matches!(event, Event::Unknown(_)) { last_packet = Instant::now(); }
-                match event {
-                    Event::Move { counter, cube_time_ms, movement } => {
-                        let outcome = tracker.on_move(ObservedMove { counter, cube_time_ms, movement });
-                        request_state |= outcome.request_state;
-                        if outcome.accepted {
-                            tracing::debug!(%movement, counter, "Turn");
-                            let _ = tx.send(Message::Turn { session:generation, record:MoveRecord { movement, counter, cube_time_ms } });
-                            let _ = tx.send(Message::State { session:generation, tracker:tracker.clone() });
-                        }
-                    }
-                    Event::Snapshot { counter, state } => {
-                        let outcome = tracker.on_snapshot(counter, state);
-                        request_state |= outcome.request_state;
-                        if outcome.accepted {
-                            if tracker.synced { request_state = false; }
-                            let _ = tx.send(Message::State { session:generation, tracker:tracker.clone() });
-                        }
-                    }
-                    Event::Disconnect => bail!("The cube requested disconnection"),
-                    Event::Unknown(kind) => tracing::trace!(kind, "Ignored an optional GAN event"),
-                    metadata => { let _ = tx.send(Message::Metadata { session:generation, event:metadata }); }
-                }
+                if events.iter().any(|event| !matches!(event, Event::Unknown(_))) { last_packet = Instant::now(); }
+                request_state |= apply_events(events, &mut tracker, tx, generation)?;
+                if tracker.synced { request_state = false; }
                 if tracker.synced { unsynced_since = None; }
                 else { unsynced_since.get_or_insert_with(Instant::now); }
             }
@@ -430,11 +472,11 @@ async fn connected(
                 // heals undetected drift. Gaps trigger a prompt, coalesced read.
                 if last_state_request.elapsed() >= Duration::from_secs(5)
                     || (request_state && last_state_request.elapsed() >= Duration::from_millis(250)) {
-                    request(peripheral, command, &cipher, ReadRequest::State).await?;
+                    request(peripheral, command, &cipher, protocol, ReadRequest::State).await?;
                     last_state_request = Instant::now(); request_state = false;
                 }
                 if last_battery_request.elapsed() >= Duration::from_secs(60) {
-                    request(peripheral, command, &cipher, ReadRequest::Battery).await?;
+                    request(peripheral, command, &cipher, protocol, ReadRequest::Battery).await?;
                     last_battery_request = Instant::now();
                 }
             }
@@ -442,9 +484,232 @@ async fn connected(
     }
 }
 
+fn apply_events(
+    events: Vec<Event>,
+    tracker: &mut Tracker,
+    tx: &Events,
+    session: u64,
+) -> Result<bool> {
+    let mut request_state = false;
+    for event in events {
+        match event {
+            Event::Move {
+                counter,
+                cube_time_ms,
+                movement,
+            } => {
+                let outcome = tracker.on_move(ObservedMove {
+                    counter,
+                    cube_time_ms,
+                    movement,
+                });
+                request_state |= outcome.request_state;
+                if outcome.accepted {
+                    let _ = tx.send(Message::Turn {
+                        session,
+                        record: MoveRecord {
+                            movement,
+                            counter,
+                            cube_time_ms,
+                        },
+                    });
+                    let _ = tx.send(Message::State {
+                        session,
+                        tracker: tracker.clone(),
+                    });
+                }
+            }
+            Event::Snapshot { counter, state } => {
+                let outcome = tracker.on_snapshot(counter, state);
+                request_state |= outcome.request_state;
+                if outcome.accepted {
+                    if tracker.synced {
+                        request_state = false;
+                    }
+                    let _ = tx.send(Message::State {
+                        session,
+                        tracker: tracker.clone(),
+                    });
+                }
+            }
+            Event::Disconnect => bail!("The cube requested disconnection"),
+            Event::Unknown(kind) => tracing::trace!(kind, "Ignored an optional GAN event"),
+            metadata => {
+                let _ = tx.send(Message::Metadata {
+                    session,
+                    event: metadata,
+                });
+            }
+        }
+    }
+    Ok(request_state)
+}
+async fn read_value(peripheral: &Peripheral, characteristic: &Characteristic) -> Result<Vec<u8>> {
+    timeout(Duration::from_secs(4), peripheral.read(characteristic))
+        .await
+        .context("Cube GATT read timed out")?
+        .context("Cannot read cube characteristic")
+}
+async fn read_gen1(
+    peripheral: &Peripheral,
+    characteristic: &Characteristic,
+    cipher: &gen1::Cipher,
+) -> Result<Vec<u8>> {
+    Ok(cipher.decrypt(&read_value(peripheral, characteristic).await?)?)
+}
+async fn connected_gen1(
+    peripheral: &Peripheral,
+    session: u64,
+    tx: &Events,
+    resync: &mut mpsc::UnboundedReceiver<()>,
+) -> Result<()> {
+    let chars = peripheral.characteristics();
+    let get = |service: &str, id: &str| -> Result<&Characteristic> {
+        let service = Uuid::parse_str(service)?;
+        let id = Uuid::parse_str(id)?;
+        chars
+            .iter()
+            .find(|c| c.service_uuid == service && c.uuid == id)
+            .context("GAN Gen1 read characteristic is missing")
+    };
+    let firmware = read_value(peripheral, get(gen1::DEVICE_INFO, gen1::FIRMWARE)?).await?;
+    let hardware = read_value(peripheral, get(gen1::DEVICE_INFO, gen1::HARDWARE)?).await?;
+    let cipher = gen1::Cipher::new(&firmware, &hardware)?;
+    let state = get(gen1::SERVICE, gen1::STATE)?;
+    let timing = get(gen1::SERVICE, gen1::TIMING)?;
+    let facelets = get(gen1::SERVICE, gen1::FACELETS)?;
+    let battery = get(gen1::SERVICE, gen1::BATTERY)?;
+    let _ = tx.send(Message::Metadata {
+        session,
+        event: Event::Firmware(format!("{}.{}.{}", firmware[0], firmware[1], firmware[2])),
+    });
+    status(
+        tx,
+        session,
+        ConnectionStatus::Synchronizing,
+        "Reading GAN Gen1 state; briefly hold the cube still for an authoritative snapshot",
+    );
+    let mut decoder = gen1::Decoder::default();
+    let mut tracker = Tracker::default();
+    let mut poll = interval(Duration::from_millis(50));
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_state_request: Option<Instant> = None;
+    let mut last_battery_request: Option<Instant> = None;
+    let mut request_state = true;
+    let mut unsynced_since = Some(Instant::now());
+    loop {
+        tokio::select! {
+            Some(()) = resync.recv() => {
+                tracker.invalidate(); request_state = true;
+                let _ = tx.send(Message::State { session, tracker: tracker.clone() });
+            }
+            _ = poll.tick() => {
+                // Gen1 has no move notifications: read its rolling six-move window.
+                let raw = read_gen1(peripheral, state, &cipher).await?;
+                let counter = gen1::counter(&raw)?;
+                if tracker.counter.is_some_and(|previous| previous != counter) {
+                    let times = read_gen1(peripheral, timing, &cipher).await?;
+                    request_state |= apply_events(decoder.moves(&raw, &times)?, &mut tracker, tx, session)?;
+                }
+                let due = last_state_request.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)
+                    || (request_state && t.elapsed() >= Duration::from_millis(250)));
+                if due {
+                    let colors = read_gen1(peripheral, facelets, &cipher).await?;
+                    let after = read_gen1(peripheral, state, &cipher).await?;
+                    if let Some(event) = decoder.snapshot(&raw, &colors, &after)? {
+                        request_state = apply_events(vec![event], &mut tracker, tx, session)?;
+                    } else {
+                        // The cube moved during the facelet read. Freeze prediction;
+                        // try another bracketed read rather than attach a wrong serial.
+                        tracker.invalidate(); request_state = true;
+                        let _ = tx.send(Message::State { session, tracker: tracker.clone() });
+                    }
+                    last_state_request = Some(Instant::now());
+                }
+                if last_battery_request.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                    let data = read_gen1(peripheral, battery, &cipher).await?;
+                    apply_events(vec![gen1::battery(&data)?], &mut tracker, tx, session)?;
+                    last_battery_request = Some(Instant::now());
+                }
+            }
+        }
+        if tracker.synced {
+            unsynced_since = None;
+        } else {
+            unsynced_since.get_or_insert_with(Instant::now);
+        }
+        if unsynced_since.is_some_and(|t| t.elapsed() > Duration::from_secs(10)) {
+            bail!(
+                "No stable GAN Gen1 snapshot. Briefly hold the cube still and check firmware/antenna range."
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scanning_includes_the_credited_gan_compatible_name_families() {
+        for name in ["GAN356", "GAN12", "MG3Ai", "AiCube"] {
+            assert!(supported_name(name));
+        }
+        for name in ["Headphones", "", "MoyuOtherProtocol"] {
+            assert!(!supported_name(name));
+        }
+    }
+    #[test]
+    fn shared_event_path_freezes_gaps_and_repairs_without_filling_the_log() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tracker = Tracker::default();
+        assert!(
+            !apply_events(
+                vec![Event::Snapshot {
+                    counter: 10,
+                    state: cube_core::CubeState::solved()
+                }],
+                &mut tracker,
+                &tx,
+                7
+            )
+            .unwrap()
+        );
+        assert!(
+            apply_events(
+                vec![Event::Move {
+                    counter: 13,
+                    cube_time_ms: 100,
+                    movement: "R".parse().unwrap()
+                }],
+                &mut tracker,
+                &tx,
+                7
+            )
+            .unwrap()
+        );
+        assert!(!tracker.synced);
+        assert!(tracker.state.as_ref().unwrap().is_solved());
+        assert!(
+            !apply_events(
+                vec![Event::Snapshot {
+                    counter: 13,
+                    state: cube_core::CubeState::solved()
+                }],
+                &mut tracker,
+                &tx,
+                7
+            )
+            .unwrap()
+        );
+        assert!(tracker.synced);
+        let mut turns = 0;
+        while let Ok(message) = rx.try_recv() {
+            if matches!(message, Message::Turn { session: 7, .. }) {
+                turns += 1;
+            }
+        }
+        assert_eq!(turns, 1);
+    }
     #[test]
     fn retries_back_off_and_remain_bounded() {
         assert_eq!(

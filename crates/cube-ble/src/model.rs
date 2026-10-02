@@ -1,14 +1,15 @@
-use cube_core::{CubeState, MacAddress, Move};
+use cube_core::{CubeState, MacAddress, Move, protocol::Generation};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedDevice {
-    /// Stable local identity: the real cube MAC, even on CoreBluetooth.
+    /// Real MAC when available, otherwise a stable OS identity for MAC-free Gen1.
     pub id: String,
     pub name: String,
     pub peripheral_id: String,
-    pub mac: MacAddress,
+    #[serde(default)]
+    pub mac: Option<MacAddress>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -44,6 +45,7 @@ pub enum ConnectionStatus {
     Connected,
     Retrying,
     Unsupported,
+    NeedsSetup,
     Demo,
 }
 impl ConnectionStatus {
@@ -56,6 +58,7 @@ impl ConnectionStatus {
             Self::Connected => "Connected",
             Self::Retrying => "Reconnecting",
             Self::Unsupported => "Unsupported protocol",
+            Self::NeedsSetup => "Hardware address needed",
             Self::Demo => "Demo",
         }
     }
@@ -90,6 +93,7 @@ pub struct ActiveCube {
     pub counter: Option<u8>,
     pub battery: Option<u8>,
     pub hardware: HardwareInfo,
+    pub protocol: Option<Generation>,
     pub history: VecDeque<MoveRecord>,
     pub observed_turns: u64,
     pub missed_turns: u64,
@@ -108,6 +112,7 @@ impl ActiveCube {
             counter: None,
             battery: None,
             hardware: HardwareInfo::default(),
+            protocol: None,
             history: VecDeque::new(),
             observed_turns: 0,
             missed_turns: 0,
@@ -120,7 +125,7 @@ impl ActiveCube {
             id: "demo".into(),
             name: "Practice cube".into(),
             peripheral_id: String::new(),
-            mac: "01:02:03:04:05:06".parse().expect("demo address"),
+            mac: None,
         };
         let mut active = Self::new(&device);
         active.status = ConnectionStatus::Demo;

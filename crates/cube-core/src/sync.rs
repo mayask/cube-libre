@@ -44,7 +44,8 @@ impl Tracker {
             && let Some(counter) = self.counter
         {
             let delta = event.counter.wrapping_sub(counter);
-            // GAN Gen4's history counter is modulo 256. Older notifications must
+            // GAN's shared history window is modulo 256 across these drivers.
+            // Gen3/4 wire counters are normalized to their low byte. Older events must
             // not undo a newer authoritative snapshot.
             if delta == 0 || delta >= 128 {
                 return MoveOutcome::default();

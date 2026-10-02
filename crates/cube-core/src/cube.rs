@@ -88,6 +88,8 @@ impl FromStr for Move {
 pub enum CubeError {
     #[error("Invalid cube move")]
     InvalidMove,
+    #[error("Invalid cube facelets or fixed centers")]
+    Facelets,
     #[error("Invalid cubie permutation")]
     Permutation,
     #[error("Invalid cubie orientation")]
@@ -195,6 +197,56 @@ impl CubeState {
             }
         }
         Ok(state)
+    }
+    /// Validate a complete URFDLB facelet frame, including cubie uniqueness,
+    /// orientation sums and parity. Gen1 must not bypass the same validation
+    /// applied to the compact cubie frames from later generations.
+    pub fn from_facelets(text: &str) -> Result<Self, CubeError> {
+        if text.len() != 54 {
+            return Err(CubeError::Facelets);
+        }
+        let mut stickers = [Face::U; 54];
+        for (i, byte) in text.bytes().enumerate() {
+            stickers[i] = Face::ALL
+                .into_iter()
+                .find(|f| f.code().as_bytes()[0] == byte)
+                .ok_or(CubeError::Facelets)?;
+        }
+        for face in Face::ALL {
+            if stickers[face as usize * 9 + 4] != face
+                || stickers.iter().filter(|&&f| f == face).count() != 9
+            {
+                return Err(CubeError::Facelets);
+            }
+        }
+        let mut c = Cubies::solved();
+        for (i, slots) in CORNERS.iter().enumerate() {
+            let mut found = None;
+            for (piece, colors) in CORNERS.iter().enumerate() {
+                for orientation in 0..3 {
+                    if (0..3)
+                        .all(|p| stickers[slots[(p + orientation) % 3]] == Face::ALL[colors[p] / 9])
+                    {
+                        found = Some((piece as u8, orientation as u8));
+                    }
+                }
+            }
+            (c.cp[i], c.co[i]) = found.ok_or(CubeError::Permutation)?;
+        }
+        for (i, slots) in EDGES.iter().enumerate() {
+            let mut found = None;
+            for (piece, colors) in EDGES.iter().enumerate() {
+                for orientation in 0..2 {
+                    if (0..2)
+                        .all(|p| stickers[slots[(p + orientation) % 2]] == Face::ALL[colors[p] / 9])
+                    {
+                        found = Some((piece as u8, orientation as u8));
+                    }
+                }
+            }
+            (c.ep[i], c.eo[i]) = found.ok_or(CubeError::Permutation)?;
+        }
+        Self::from_cubies(&c)
     }
     pub fn stickers(&self) -> &[Face; 54] {
         &self.stickers

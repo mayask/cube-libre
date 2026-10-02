@@ -1,4 +1,5 @@
-//! GAN Gen4 protocol. Adapted from gan-web-bluetooth (MIT), see notices.
+//! GAN Gen1–Gen4 protocols. Adapted from gan-web-bluetooth and its MIT fork
+//! smartcube-web-bluetooth; see THIRD_PARTY_NOTICES.md.
 //! The only outbound commands exposed here are read-only requests.
 use crate::{
     CubeState, Face, Move,
@@ -12,9 +13,89 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
 
-pub const SERVICE: &str = "00000010-0000-fff7-fff6-fff5fff4fff0";
-pub const COMMAND: &str = "0000fff5-0000-1000-8000-00805f9b34fb";
-pub const STATE: &str = "0000fff6-0000-1000-8000-00805f9b34fb";
+pub mod gen1;
+mod gen2;
+mod gen3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Generation {
+    Gen1,
+    Gen2,
+    Gen3,
+    Gen4,
+}
+impl Generation {
+    pub const ALL: [Self; 4] = [Self::Gen1, Self::Gen2, Self::Gen3, Self::Gen4];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gen1 => "GAN Gen1",
+            Self::Gen2 => "GAN Gen2",
+            Self::Gen3 => "GAN Gen3",
+            Self::Gen4 => "GAN Gen4",
+        }
+    }
+    pub fn service(self) -> &'static str {
+        match self {
+            Self::Gen1 => gen1::SERVICE,
+            Self::Gen2 => "6e400001-b5a3-f393-e0a9-e50e24dc4179",
+            Self::Gen3 => "8653000a-43e6-47b7-9cb0-5fc21d4ae340",
+            Self::Gen4 => "00000010-0000-fff7-fff6-fff5fff4fff0",
+        }
+    }
+    /// Gen1 reads GATT values; later generations use a command/notify pair.
+    pub fn notification_profile(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Gen1 => None,
+            Self::Gen2 => Some((
+                "28be4a4a-cd67-11e9-a32f-2a2ae2dbcce4",
+                "28be4cb6-cd67-11e9-a32f-2a2ae2dbcce4",
+            )),
+            Self::Gen3 => Some((
+                "8653000c-43e6-47b7-9cb0-5fc21d4ae340",
+                "8653000b-43e6-47b7-9cb0-5fc21d4ae340",
+            )),
+            Self::Gen4 => Some((
+                "0000fff5-0000-1000-8000-00805f9b34fb",
+                "0000fff6-0000-1000-8000-00805f9b34fb",
+            )),
+        }
+    }
+    /// Service discovery is authoritative, never a guess based on model name.
+    pub fn from_services(services: &[&str]) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .rev()
+            .find(|g| services.iter().any(|s| s.eq_ignore_ascii_case(g.service())))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyProfile {
+    Gan,
+    /// The AiCube / MoYu AI 2023 variant of the Gen2 wire protocol.
+    MoyuAi2023,
+}
+
+pub struct Decoder {
+    generation: Generation,
+    gen2: gen2::Decoder,
+}
+impl Decoder {
+    pub fn new(generation: Generation) -> Self {
+        Self {
+            generation,
+            gen2: gen2::Decoder::default(),
+        }
+    }
+    pub fn decode(&mut self, data: &[u8]) -> Result<Vec<Event>, ProtocolError> {
+        match self.generation {
+            Generation::Gen1 => Err(ProtocolError::Field),
+            Generation::Gen2 => self.gen2.decode(data),
+            Generation::Gen3 => gen3::decode(data),
+            Generation::Gen4 => decode(data).map(|event| vec![event]),
+        }
+    }
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -24,6 +105,8 @@ pub enum ProtocolError {
     Length,
     #[error("Invalid GAN packet field")]
     Field,
+    #[error("Unsupported GAN Gen1 firmware or invalid device-information key data")]
+    Firmware,
     #[error(transparent)]
     Cube(#[from] CubeError),
 }
@@ -91,6 +174,9 @@ pub struct GanCipher {
 }
 impl GanCipher {
     pub fn new(mac: MacAddress) -> Self {
+        Self::for_profile(mac, KeyProfile::Gan)
+    }
+    pub fn for_profile(mac: MacAddress, profile: KeyProfile) -> Self {
         let mut key = [
             0x01, 0x02, 0x42, 0x28, 0x31, 0x91, 0x16, 0x07, 0x20, 0x05, 0x18, 0x54, 0x42, 0x11,
             0x12, 0x53,
@@ -99,6 +185,16 @@ impl GanCipher {
             0x11, 0x03, 0x32, 0x28, 0x21, 0x01, 0x76, 0x27, 0x20, 0x95, 0x78, 0x14, 0x32, 0x12,
             0x02, 0x43,
         ];
+        if profile == KeyProfile::MoyuAi2023 {
+            key = [
+                0x05, 0x12, 0x02, 0x45, 0x02, 0x01, 0x29, 0x56, 0x12, 0x78, 0x12, 0x76, 0x81, 0x01,
+                0x08, 0x03,
+            ];
+            iv = [
+                0x01, 0x44, 0x28, 0x06, 0x86, 0x21, 0x22, 0x28, 0x51, 0x05, 0x08, 0x31, 0x82, 0x02,
+                0x21, 0x06,
+            ];
+        }
         for (i, salt) in mac.0.iter().rev().enumerate() {
             key[i] = ((key[i] as u16 + *salt as u16) % 255) as u8;
             iv[i] = ((iv[i] as u16 + *salt as u16) % 255) as u8;
@@ -146,15 +242,33 @@ impl GanCipher {
         self.chunk(&mut out, 0, false);
         Ok(out)
     }
-    pub fn request(&self, request: ReadRequest) -> Vec<u8> {
-        let mut frame = [0; 20];
-        let prefix: &[u8] = match request {
-            ReadRequest::State => &[0xdd, 4, 0, 0xed, 0, 0],
-            ReadRequest::Battery => &[0xdd, 4, 0, 0xef, 0, 0],
-            ReadRequest::Hardware => &[0xdf, 3, 0, 0, 0],
+    pub fn request(
+        &self,
+        generation: Generation,
+        request: ReadRequest,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let prefix: &[u8] = match (generation, request) {
+            (Generation::Gen1, _) => return Err(ProtocolError::Field),
+            (Generation::Gen2, ReadRequest::State) => &[0x04],
+            (Generation::Gen2, ReadRequest::Battery) => &[0x09],
+            (Generation::Gen2, ReadRequest::Hardware) => &[0x05],
+            (Generation::Gen3, ReadRequest::State) => &[0x68, 0x01],
+            (Generation::Gen3, ReadRequest::Battery) => &[0x68, 0x07],
+            (Generation::Gen3, ReadRequest::Hardware) => &[0x68, 0x04],
+            (Generation::Gen4, ReadRequest::State) => &[0xdd, 4, 0, 0xed, 0, 0],
+            (Generation::Gen4, ReadRequest::Battery) => &[0xdd, 4, 0, 0xef, 0, 0],
+            (Generation::Gen4, ReadRequest::Hardware) => &[0xdf, 3, 0, 0, 0],
         };
+        let mut frame = vec![
+            0;
+            if generation == Generation::Gen3 {
+                16
+            } else {
+                20
+            }
+        ];
         frame[..prefix.len()].copy_from_slice(prefix);
-        self.encrypt(&frame).expect("20-byte command")
+        self.encrypt(&frame)
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +296,43 @@ pub enum Event {
     ProductDate(String),
     Disconnect,
     Unknown(u8),
+}
+fn ascii(data: &[u8]) -> Result<String, ProtocolError> {
+    if !data
+        .iter()
+        .all(|b| *b == 0 || b.is_ascii_graphic() || *b == b' ')
+    {
+        return Err(ProtocolError::Field);
+    }
+    Ok(String::from_utf8_lossy(data)
+        .trim_end_matches('\0')
+        .to_owned())
+}
+fn snapshot(
+    data: &[u8],
+    cp: usize,
+    co: usize,
+    ep: usize,
+    eo: usize,
+) -> Result<CubeState, ProtocolError> {
+    let mut c = Cubies::solved();
+    for i in 0..7 {
+        c.cp[i] = word(data, cp + 3 * i, 3)? as u8;
+        c.co[i] = word(data, co + 2 * i, 2)? as u8;
+    }
+    c.cp[7] = 28u8
+        .checked_sub(c.cp[..7].iter().sum())
+        .ok_or(ProtocolError::Field)?;
+    c.co[7] = (3 - c.co[..7].iter().sum::<u8>() % 3) % 3;
+    for i in 0..11 {
+        c.ep[i] = word(data, ep + 4 * i, 4)? as u8;
+        c.eo[i] = word(data, eo + i, 1)? as u8;
+    }
+    c.ep[11] = 66u8
+        .checked_sub(c.ep[..11].iter().sum())
+        .ok_or(ProtocolError::Field)?;
+    c.eo[11] = (2 - c.eo[..11].iter().sum::<u8>() % 2) % 2;
+    Ok(CubeState::from_cubies(&c)?)
 }
 fn word(data: &[u8], start: usize, count: usize) -> Result<u32, ProtocolError> {
     if count > 32 || start + count > data.len() * 8 {
@@ -224,26 +375,9 @@ pub fn decode(data: &[u8]) -> Result<Event, ProtocolError> {
             if payload.len() < 16 {
                 return Err(ProtocolError::Length);
             }
-            let mut c = Cubies::solved();
-            for i in 0..7 {
-                c.cp[i] = word(payload, 32 + 3 * i, 3)? as u8;
-                c.co[i] = word(payload, 53 + 2 * i, 2)? as u8;
-            }
-            c.cp[7] = 28u8
-                .checked_sub(c.cp[..7].iter().sum())
-                .ok_or(ProtocolError::Field)?;
-            c.co[7] = (3 - c.co[..7].iter().sum::<u8>() % 3) % 3;
-            for i in 0..11 {
-                c.ep[i] = word(payload, 69 + 4 * i, 4)? as u8;
-                c.eo[i] = word(payload, 113 + i, 1)? as u8;
-            }
-            c.ep[11] = 66u8
-                .checked_sub(c.ep[..11].iter().sum())
-                .ok_or(ProtocolError::Field)?;
-            c.eo[11] = (2 - c.eo[..11].iter().sum::<u8>() % 2) % 2;
             Ok(Event::Snapshot {
                 counter: data[2],
-                state: CubeState::from_cubies(&c)?,
+                state: snapshot(payload, 32, 53, 69, 113)?,
             })
         }
         0xef => {
@@ -316,7 +450,12 @@ mod tests {
         // first block then overlapping final block. MAC 01:02:03:04:05:06.
         let cipher = GanCipher::new("01:02:03:04:05:06".parse().unwrap());
         let expected = hex("5c67ba9856dc67e7113c83fe8cc31dc72345ddf9");
-        assert_eq!(cipher.request(ReadRequest::State), expected);
+        assert_eq!(
+            cipher
+                .request(Generation::Gen4, ReadRequest::State)
+                .unwrap(),
+            expected
+        );
         assert_eq!(
             cipher.decrypt(&expected).unwrap(),
             hex("dd0400ed00000000000000000000000000000000")

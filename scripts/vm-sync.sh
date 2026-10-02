@@ -6,5 +6,6 @@ source "$(dirname "$0")/vm-common.sh"
 rsync -az --no-times --omit-dir-times --checksum --delete --itemize-changes \
     --exclude .git/ --exclude target/ --exclude .dev/ --exclude dist/ \
     --exclude '.env' --exclude '.env.*' --exclude '*.log' --exclude '*.bundle' \
+    --exclude '*.pem' --exclude '*.key' --exclude '__pycache__/' --exclude '*.pyc' \
     -e "$RSYNC_SSH" "$ROOT/" "$VM_HOST:$VM_DIR/" \
     | "${SSH[@]}" "$VM_HOST" 'tee -a ~/cube-libre-dev.log'

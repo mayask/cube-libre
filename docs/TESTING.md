@@ -14,17 +14,23 @@ supports offline builds without copying Cargo credentials.
 
 ## Automated checks
 
-- `cargo test --workspace --locked`: **21 tests passed** on Debian 13.
+- `cargo test --workspace --locked`: **42 tests passed** on Debian 13.
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed.
 - `cargo build --locked`: passed.
 - `cargo fmt --all -- --check`: passed.
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: **6 tests passed**;
+  mock libvirt/USB commands only, never a real adapter handoff.
 
 Coverage: OpenSSL golden AES vectors, all six move encodings, truncated/invalid
 packets, impossible cubie states, independent F/R turn reference, long reversible
 sequences, duplicate and stale events, modulo-256 wrap, initial unknown state,
 gap-triggered resynchronization and buffered moves, atomic persistence,
 corrupt/future registry protection, cancellation/backoff, old-session rejection,
-simulator state and no persistence.
+simulator state and no persistence. Additional generation coverage includes
+Gen1 ECB vectors for both known firmware keys, validated Gen1 facelet packing,
+stable-counter snapshot bracketing, six-move catch-up/half turns, Gen2 CBC and
+AiCube key vectors, seven-move catch-up, Gen3 layouts, all generation-specific
+read requests, metadata, old registry compatibility and MAC-free Gen1 identities.
 
 A Linux/Windows/macOS CI matrix is included. Consult its actual run results;
 Linux is the only platform manually exercised so far.
@@ -42,24 +48,30 @@ Linux is the only platform manually exercised so far.
 - 3D/net layouts visually reviewed; corrected WebKit preserved-3D flattening.
 - Compact-height layout checked at 1280×800.
 - Startup reconnect preference verified in the actual local JSON file.
-- Cube Libre name and original cocktail/lime icon verified in the visible app;
-  the renamed build, tests and strict Clippy checks pass.
+- Cube Libre name and cocktail/lime icon with miniature 3×3 twisty cubes
+  verified in the visible app; build, tests and strict Clippy checks pass.
 
 ## Physical hardware verification status
 
 GAN Gen4 protocol selection was established with an independent BLE probe of
 the iCarry E hardware family. That is **not** an end-to-end test of this Rust app.
-Physical-cube tests below remain **pending** until performed and recorded.
+Physical-cube tests below remain **pending** for every generation until performed
+and recorded. Gen1–Gen4 driver coverage is documented in [GAN_PROTOCOLS.md](GAN_PROTOCOLS.md);
+it is not evidence of successful hardware connections on those models.
 Do not infer a hardware pass from the simulator or service UUIDs alone.
 
 ## Hardware checklist
 
 1. Enable the BLE adapter. For a VM, obtain permission before USB passthrough:
    host Bluetooth peripherals will be unavailable while its adapter is assigned
-   to the guest. A separate USB adapter avoids disrupting the host.
+   to the guest. A separate USB adapter avoids disrupting the host. See
+   [VM_BLUETOOTH.md](VM_BLUETOOTH.md) for an opt-in, live-only handoff helper.
+   Actual radio handoff remains unverified; inspection/guard checks change nothing.
 2. Close CubeStation / disconnect other cube apps. Wake the cube near the antenna.
-3. Add a device, select the cube, confirm its MAC, then Add & connect.
-4. Verify live-state badge, hardware name, battery and firmware.
+3. Add a device, select the cube, confirm its MAC for Gen2–4, then Add & connect.
+   Gen1 does not need a MAC; briefly hold still to establish a bracketed snapshot.
+4. Verify live-state badge, selected **protocol generation**, battery, firmware
+   and available hardware information (Gen1 has less metadata).
 5. Compare **every face** in Net view to the real cube (white up, green front).
 6. Do one clockwise and one inverse turn on each face. Check notation and
    resulting state; then a mixed sequence and faster turns.

@@ -1,7 +1,7 @@
 use cube_ble::{
     ActiveCube, AppState, Backend, Command, ConnectionStatus, NearbyDevice, SavedDevice,
 };
-use cube_core::{CubeState, Face, MacAddress};
+use cube_core::{CubeState, Face, MacAddress, protocol::Generation};
 use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq)]
@@ -80,7 +80,7 @@ pub fn App() -> Element {
                         ConnectionCard { active: data.active.clone(), adapter: data.adapter.clone() }
                     }
                 }
-                footer { class: "workspace-footer", span { "No accounts. No cloud. Just your cube." } span { "GAN Gen4 · desktop preview" } }
+                footer { class: "workspace-footer", span { "No accounts. No cloud. Just your cube." } span { "GAN Gen1–4 · desktop preview" } }
             }
         }
         if let Some(dialog) = modal.read().clone() {
@@ -118,7 +118,7 @@ fn DeviceCard(
                 div { class: "device-title", strong { "{device.name}" } span { class: "tiny muted", "GAN smart cube" } }
                 span { class: if connected { "status-dot live" } else if busy { "status-dot pending" } else { "status-dot" }, title: if connected { "Connected" } else { "Not connected" } }
             }
-            div { class: "device-address mono", "{device.mac}" }
+            div { class: "device-address mono", if let Some(mac) = device.mac { "{mac}" } else { "Native device identity · no MAC set" } }
             div { class: "device-actions",
                 if connected || busy {
                     button { class: "button subtle compact", onclick: move |_| backend.read().send(Command::Disconnect), if busy { "Cancel connection" } else { "Disconnect" } }
@@ -208,7 +208,7 @@ fn CubeWorkspace(active: Option<ActiveCube>, on_add: EventHandler<()>) -> Elemen
                     button { class: "text-button", onclick: move |_| backend.read().send(Command::StopDemo), "Leave demo" }
                 }
             }
-            div { class: "reference-note", Icon { name: "compass", size: 19 } div { strong { "A fixed reference frame" } p { "White on top, green in front. Your iCarry E senses face turns, not whole-cube rotations. View controls only move the camera." } } }
+            div { class: "reference-note", Icon { name: "compass", size: 19 } div { strong { "A fixed reference frame" } p { "White on top, green in front. Face turns use a fixed reference frame. View controls only move the camera." } } }
             div { class: "face-legend", for face in Face::ALL { span { i { style: "background:{face.css_color()}" } "{face}" } } }
             if status == Some(ConnectionStatus::Unsupported) { p { class: "tiny muted", "Nothing on this device has been reset or modified." } }
         }
@@ -303,8 +303,8 @@ fn ConnectionCard(active: Option<ActiveCube>, adapter: String) -> Element {
         .is_some_and(|a| a.status == ConnectionStatus::Demo);
     let protocol = if demo {
         "Simulator"
-    } else if active.as_ref().is_some_and(|a| a.counter.is_some()) {
-        "GAN Gen4"
+    } else if let Some(protocol) = active.as_ref().and_then(|a| a.protocol) {
+        protocol.label()
     } else {
         "Detect on connect"
     };
@@ -313,7 +313,7 @@ fn ConnectionCard(active: Option<ActiveCube>, adapter: String) -> Element {
             div { class: "connection-status", span { class: if active.as_ref().is_some_and(|a| a.status == ConnectionStatus::Connected) { "status-dot live" } else { "status-dot" } } strong { "{status}" } }
             div { class: "battery-row", span { class: "muted", "Battery" } strong { "{battery_text}" } }
             div { class: "battery-track", aria_hidden: "true", div { style: "width:{battery.unwrap_or(0)}%" } }
-            dl { class: "metadata", dt { "Model" } dd { "{model}" } dt { "Protocol" } dd { "{protocol}" } dt { "Firmware" } dd { "{firmware}" } dt { "Keep-alive" } dd { if active.as_ref().is_some_and(|a| matches!(a.status, ConnectionStatus::Connected | ConnectionStatus::Synchronizing)) { "Every 5s" } else { "Paused" } } }
+            dl { class: "metadata", dt { "Model" } dd { "{model}" } dt { "Protocol" } dd { "{protocol}" } dt { "Firmware" } dd { "{firmware}" } dt { "Keep-alive" } dd { if active.as_ref().is_some_and(|a| matches!(a.status, ConnectionStatus::Connected | ConnectionStatus::Synchronizing)) { if active.as_ref().is_some_and(|a| a.protocol == Some(Generation::Gen1)) { "Polling" } else { "Every 5s" } } else { "Paused" } } }
             details { class: "diagnostics", summary { "Connection details" }
                 p { class: "tiny muted", "{adapter}" }
                 if let Some(a) = &active {
@@ -330,7 +330,7 @@ fn AddDevice(state: AppState, on_close: EventHandler<()>) -> Element {
     let backend = use_context::<Signal<Backend>>();
     rsx! {
         div { class: "modal-heading", div { span { class: "eyebrow", "DEVICE MANAGEMENT" } h2 { "Add a smart cube" } } button { class: "icon-button", aria_label: "Close device manager", onclick: move |_| on_close.call(()), Icon { name: "close" } } }
-        p { class: "muted", "GAN Gen4 cubes, including your iCarry E. No system pairing needed." }
+        p { class: "muted", "GAN Gen1–Gen4, including iCarry, iCarry E, GAN i-series and compatible MG/AiCube models. No system pairing needed." }
         div { class: "setup-note", Icon { name: "info", size: 20 } p { "Wake the cube with four quick turns of its white face. Keep it near the antenna and disconnect CubeStation or other cube apps." } }
         div { class: "scan-heading", span { class: "section-label", if state.scanning { span { class: "spinner" } "SCANNING NEARBY" } else { "NEARBY CUBES" } }
             if state.scanning { button { class: "button subtle compact", onclick: move |_| backend.read().send(Command::StopScan), "Stop scan" } }
@@ -339,10 +339,10 @@ fn AddDevice(state: AppState, on_close: EventHandler<()>) -> Element {
         if let Some(error) = &state.error { div { class: "banner error", role: "alert", "{error}" } }
         div { class: "nearby-list",
             for device in state.nearby.clone() {
-                NearbyCard { key: "{device.id}", saved: device.mac.is_some_and(|mac| state.registry.devices.iter().any(|d| d.mac == mac)), device, on_added: on_close }
+                NearbyCard { key: "{device.id}", saved: state.registry.devices.iter().any(|d| d.peripheral_id == device.id || (device.mac.is_some() && d.mac == device.mac)), device, on_added: on_close }
             }
             if state.nearby.is_empty() {
-                div { class: "scan-empty", Icon { name: "bluetooth", size: 35 } strong { if state.scanning { "Looking for your cube…" } else { "No cubes found" } } p { "Only GAN cubes are listed. If this is a VM, make sure its Bluetooth adapter is passed through." } }
+                div { class: "scan-empty", Icon { name: "bluetooth", size: 35 } strong { if state.scanning { "Looking for your cube…" } else { "No cubes found" } } p { "GAN, MG and AiCube devices are listed; services are checked on connection. A VM needs Bluetooth USB passthrough." } }
             }
         }
         div { class: "modal-footer", Icon { name: "shield", size: 16 } span { "Saved locally. You can rename or forget devices anytime." } }
@@ -355,17 +355,17 @@ fn NearbyCard(device: NearbyDevice, saved: bool, on_added: EventHandler<()>) -> 
     let mut error = use_signal(String::new);
     let candidate = device.clone();
     rsx! {
-        article { class: "nearby-card", div { class: "nearby-heading", div { class: "device-symbol", Icon { name: "cube", size: 24 } } div { strong { "{device.name}" } p { class: "tiny muted mono", if let Some(mac) = device.mac { "{mac}" } else { "Hardware address needed" } } }
+        article { class: "nearby-card", div { class: "nearby-heading", div { class: "device-symbol", Icon { name: "cube", size: 24 } } div { strong { "{device.name}" } p { class: "tiny muted mono", if let Some(mac) = device.mac { "{mac}" } else { "MAC not advertised · optional for Gen1" } } }
                 span { class: "rssi mono", if let Some(rssi) = device.rssi { "{rssi} dBm" } }
             }
             details { open: device.mac.is_none(), summary { "Hardware address" }
                 label { class: "field-label", "Cube MAC address" input { class: "text-input mono", aria_label: "Cube hardware MAC address", value: "{address}", placeholder: "AA:BB:CC:DD:EE:FF", oninput: move |e| address.set(e.value()) } }
-                p { class: "tiny muted", "Used to decode GAN data. Auto-detected when available; Apple devices may need manual entry." }
+                p { class: "tiny muted", "Required for Gen2–Gen4; auto-detected when available. Apple devices may need manual entry. Gen1 reads its key from device information and can leave this blank." }
             }
             if !error.read().is_empty() { p { class: "field-error", role: "alert", "{error}" } }
             button { class: "button primary", onclick: move |_| {
                 let mac = address.read().trim().to_owned();
-                if let Err(e) = mac.parse::<MacAddress>() { error.set(e.to_string()); return; }
+                if !mac.is_empty() && let Err(e) = mac.parse::<MacAddress>() { error.set(e.to_string()); return; }
                 backend.read().send(Command::Save { device:candidate.clone(), mac_override:mac });
                 on_added.call(());
             }, Icon { name: "bluetooth", size: 16 } if saved { "Connect saved cube" } else { "Add & connect" } }

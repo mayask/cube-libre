@@ -8,3 +8,5 @@
 *.bundle
 *.pem
 *.key
+__pycache__/
+*.pyc
